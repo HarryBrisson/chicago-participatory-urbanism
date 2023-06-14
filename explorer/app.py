@@ -7,6 +7,14 @@ app = Flask(__name__)
 def index():
     return render_template('index.html')
 
+@app.route('/stats')
+def stats():
+    return render_template('index.html')
+
+@app.route('/map')
+def map():
+    return render_template('map.html')
+
 @app.route('/api/budget-data')
 def budget_data():
     # Read budget data from a CSV or JSON file using pandas

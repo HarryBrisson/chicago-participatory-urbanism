@@ -52,6 +52,36 @@ def _get(url, timeout=60):
     return urlopen(Request(_norm(url), headers={"User-Agent": UA}), timeout=timeout)
 
 
+def _exists(url: str) -> bool:
+    """True if the asset returns 200 (GET headers, don't download the body)."""
+    try:
+        resp = _get(url, 15)
+        ok = getattr(resp, "status", 200) == 200
+        resp.close()
+        return ok
+    except Exception:  # noqa: BLE001 — 404/network -> treat as absent
+        return False
+
+
+def probe_recent_quarters(through_year=None) -> set:
+    """Directly probe recent quarterly reports. Filenames are inconsistent (three observed styles), so
+    try each style per (year, quarter). Removes the Wayback-snapshot lag for current-term data."""
+    import datetime
+
+    last = through_year or datetime.date.today().year
+    cip = f"{DAM}/supp_info/CIP_Archive"
+    found = set()
+    for y in range(2024, last + 2):  # +2 so a just-started next year is covered
+        for q in (1, 2, 3, 4):
+            for cand in (f"{cip}/Aldermanic Menu/{y} Q{q} Menu Report.pdf",
+                         f"{cip}/Aldermanic Menu/Menu Report {y} Q{q}.pdf",
+                         f"{cip}/Q{q} {y} Aldermanic Menu Program Report.pdf"):
+                if _exists(cand):
+                    found.add(cand)
+                time.sleep(0.15)
+    return found
+
+
 def discover_from_wayback() -> set:
     """Menu-PDF asset URLs found in the latest Wayback snapshot of each index page."""
     found = set()
@@ -85,8 +115,9 @@ def download(url: str) -> str | None:
 
 
 def main():
-    urls = sorted({_norm(u) for u in set(MANIFEST) | discover_from_wayback()})
-    print(f"resolved {len(urls)} menu-PDF URLs (manifest + Wayback discovery); downloading to {DEST}/ …")
+    print("probing recent quarters + Wayback discovery …")
+    urls = sorted({_norm(u) for u in set(MANIFEST) | discover_from_wayback() | probe_recent_quarters()})
+    print(f"resolved {len(urls)} menu-PDF URLs (manifest + Wayback + recent-quarter probe); downloading to {DEST}/ …")
     got = miss = 0
     for url in urls:
         result = download(url)

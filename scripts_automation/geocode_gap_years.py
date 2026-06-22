@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 import pandas as pd
@@ -45,19 +46,25 @@ def main():
     todo = [l for l in locs if l not in cache]
     print(f"{len(locs)} unique locations; {len(cache)} cached; geocoding {len(todo)} new …", flush=True)
 
-    lg = LocationGeocoder(GeoCoderAPI())
+    lg = LocationGeocoder(GeoCoderAPI())  # stateless wrappers -> safe to share across threads
+
+    def geocode_one(loc):
+        try:
+            geom = lg.process_location_text(loc)
+            return loc, (geom.wkt if geom is not None and not geom.is_empty else None)
+        except Exception:  # noqa: BLE001 — geocoder fails on some location formats; store null, continue
+            return loc, None
+
+    # I/O-bound (API waits) -> thread pool. Main thread is the sole writer, so the JSONL cache stays
+    # consistent; the resumable cache means a kill mid-run just continues next time.
     t0 = time.time()
-    with CACHE.open("a") as fh:
-        for i, loc in enumerate(todo, 1):
-            try:
-                geom = lg.process_location_text(loc)
-                w = geom.wkt if geom is not None and not geom.is_empty else None
-            except Exception:  # noqa: BLE001
-                w = None
+    with CACHE.open("a") as fh, ThreadPoolExecutor(max_workers=8) as pool:
+        for i, fut in enumerate(as_completed(pool.submit(geocode_one, l) for l in todo), 1):
+            loc, w = fut.result()
             cache[loc] = w
             fh.write(json.dumps({"loc": loc, "wkt": w}) + "\n")
             fh.flush()
-            if i % 100 == 0:
+            if i % 200 == 0:
                 rate = i / (time.time() - t0)
                 print(f"  {i}/{len(todo)}  ({rate:.1f}/s, ~{(len(todo)-i)/rate/60:.0f} min left)", flush=True)
 

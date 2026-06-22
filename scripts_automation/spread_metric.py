@@ -12,8 +12,10 @@ Prototyped on Sean's already-geocoded 2019-2022 data; the same code runs on the 
 
 from __future__ import annotations
 
+import argparse
 import json
 import math
+import statistics
 from collections import defaultdict
 from pathlib import Path
 
@@ -29,20 +31,36 @@ def _to_km(dx, dy, lat):
     return math.hypot(dx, dy) * 0.0003048  # feet -> km
 
 
-def standard_distance(points):
-    """points = [(x, y, weight)] -> $-weighted standard distance in km around the weighted mean center."""
-    w = sum(p[2] for p in points)
-    if w <= 0 or len(points) < 2:
-        return None
-    mx = sum(p[0] * p[2] for p in points) / w
-    my = sum(p[1] * p[2] for p in points) / w
+def standard_distance(points, trim_km=12.0):
+    """points = [(x, y, weight)] -> $-weighted standard distance (km) around the weighted mean center.
+
+    Robust to mis-geocodes: drops points farther than trim_km from the MEDIAN center first (no Chicago
+    ward spans >12km, and standard distance squares deviations so one bad point dominates). Returns
+    (std_km, n_trimmed)."""
+    if len(points) < 2:
+        return None, 0
+    cx, cy = statistics.median([p[0] for p in points]), statistics.median([p[1] for p in points])
+    lat0 = cy if abs(cy) < 90 else 41.88
+    kept = [p for p in points if _to_km(p[0] - cx, p[1] - cy, lat0) <= trim_km]
+    n_trim = len(points) - len(kept)
+    w = sum(p[2] for p in kept)
+    if w <= 0 or len(kept) < 2:
+        return None, n_trim
+    mx = sum(p[0] * p[2] for p in kept) / w
+    my = sum(p[1] * p[2] for p in kept) / w
     lat = my if abs(my) < 90 else 41.88
-    var_km2 = sum(p[2] * _to_km(p[0] - mx, p[1] - my, lat) ** 2 for p in points) / w
-    return math.sqrt(var_km2)
+    var_km2 = sum(p[2] * _to_km(p[0] - mx, p[1] - my, lat) ** 2 for p in kept) / w
+    return math.sqrt(var_km2), n_trim
 
 
 def main():
-    feats = json.load(open(GEOJSON))["features"]
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("--geojson", default=str(GEOJSON), help="geocoded geojson (default 2019-2022)")
+    ap.add_argument("--year", type=int, help="restrict to one year (the gap-year file mixes years)")
+    args = ap.parse_args()
+
+    feats = json.load(open(args.geojson))["features"]
+    label = f"{args.year}" if args.year else Path(args.geojson).stem
     by_ward = defaultdict(list)
     geocoded = 0
     for f in feats:
@@ -51,6 +69,8 @@ def main():
             cost = float(p["cost"])
             ward = int(p["ward"])
         except (ValueError, TypeError, KeyError):
+            continue
+        if args.year and int(p.get("year", 0)) != args.year:
             continue
         if not g:
             continue
@@ -63,12 +83,13 @@ def main():
         by_ward[ward].append((c.x, c.y, cost))
         geocoded += 1
 
-    print(f"{geocoded:,}/{len(feats):,} line items geocoded; CRS auto-detected from coords.")
-    spread = {w: standard_distance(pts) for w, pts in by_ward.items()}
-    spread = {w: s for w, s in spread.items() if s is not None}
+    raw = {w: standard_distance(pts) for w, pts in by_ward.items()}
+    spread = {w: s for w, (s, _n) in raw.items() if s is not None}
+    n_trim = sum(n for (_s, n) in raw.values())
+    print(f"{geocoded:,}/{len(feats):,} line items geocoded; {n_trim} far-outlier points trimmed (mis-geocodes).")
     ranked = sorted(spread.items(), key=lambda kv: kv[1])
 
-    print("\nSpending SPREAD by ward, 2019-2022 ($-weighted standard distance, km):")
+    print(f"\nSpending SPREAD by ward, {label} ($-weighted standard distance, km):")
     print("  most CONCENTRATED (spending clustered in a few spots):")
     for w, s in ranked[:5]:
         print(f"    Ward {w:2d}: {s:.2f} km")

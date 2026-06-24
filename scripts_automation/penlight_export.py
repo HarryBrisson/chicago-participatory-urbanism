@@ -101,7 +101,9 @@ def main():
         hhi = sum((c / t) ** 2 for c in cats[(year, ward)].values())
         years[year][str(ward)] = {
             "active_transport_share": round(active[(year, ward)] / t * 100, 1),
-            "budget_utilization": round(t / allocation(year) * 100, 1),
+            # capped at 100 = "fully deployed": >100% happens via prior-year rollover (and the historical
+            # allotment is approximate), and the accountability signal we want is UNDER-spending.
+            "budget_utilization": round(min(100.0, t / allocation(year) * 100), 1),
             "project_diversity": round((1 - hhi) * 100, 1),
         }
 

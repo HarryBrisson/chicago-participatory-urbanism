@@ -94,6 +94,17 @@ def main():
             active[(year, ward)] += cost
         cats[(year, ward)][cat] += cost
 
+    # Per-category shares beyond active transport (Penlight request 2026-08-05): the seven
+    # categories covering ~95% of all menu dollars, each as % of the ward-year's spending.
+    CATEGORY_SHARES = {
+        "share_street_resurfacing": {"Street Resurfacing"},
+        "share_lighting": {"Lighting"},
+        "share_sidewalks": {"Sidewalk Repair"},
+        "share_alleys": {"Alleys"},
+        "share_parks": {"Parks"},
+        "share_police_cameras": {"Police Cameras"},
+        "share_schools": {"Schools"},
+    }
     years: dict[int, dict] = defaultdict(dict)
     for (year, ward), t in tot.items():
         if t <= 0:
@@ -105,6 +116,8 @@ def main():
             # allotment is approximate), and the accountability signal we want is UNDER-spending.
             "budget_utilization": round(min(100.0, t / allocation(year) * 100), 1),
             "project_diversity": round((1 - hhi) * 100, 1),
+            **{field: round(sum(cats[(year, ward)][c] for c in members) / t * 100, 1)
+               for field, members in CATEGORY_SHARES.items()},
         }
 
     # spending_spread for the current era only (2025), district-shape-adjusted
@@ -138,7 +151,8 @@ def main():
         "source": "Chicago aldermanic menu spending (CIP PDFs) via ward-wise/data-analysis pipeline",
         "as_of": "2026-06",
         "temporal_mode": "vintage",
-        "metrics": ["active_transport_share", "budget_utilization", "project_diversity", "spending_spread"],
+        "metrics": ["active_transport_share", "budget_utilization", "project_diversity",
+                    "spending_spread", *sorted(CATEGORY_SHARES)],
         "years": {str(y): years[y] for y in sorted(years)},
     }
     OUT.write_text(json.dumps(payload, indent=2))
